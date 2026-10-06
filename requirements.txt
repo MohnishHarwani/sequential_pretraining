@@ -1,0 +1,11 @@
+# Tested with two environments:
+#   trainers + figures : torch 2.5.1+cu124, numpy 2.0.2, matplotlib 3.9.2
+#   prepare_data.py    : datasets 4.8.4 (pyarrow 23.0.1, pandas 3.0.2), numpy 2.4.2, torch 2.5.1+cu121
+torch>=2.5.1         # tested checkpoint-loading and attention APIs
+numpy>=1.23
+Pillow              # decode downloaded MLP dataset images
+matplotlib>=3.6
+datasets>=2.18        # downloads the public MLP image datasets
+
+huggingface_hub>=0.23  # pinned public foundation shard downloads
+pyarrow>=15          # deterministic parquet document iteration
