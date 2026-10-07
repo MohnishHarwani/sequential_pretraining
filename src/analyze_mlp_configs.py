@@ -1,4 +1,4 @@
-"""Paired accuracy and matched-probe overlap for MLP configurations A/B/C."""
+"""Paired accuracy and cross-phase representational overlap for MLP."""
 import argparse
 from collections import defaultdict
 import contextlib
@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 import numpy as np
-from mechanism_archive import overlap_scores, PROBE_COMPARISONS
+from mechanism_archive import overlap_scores
 
 
 def write_csv(path, rows):
@@ -22,6 +22,8 @@ def analyze(records, output, make_plots=True, fractions=(.01,.05,.10)):
         raise ValueError('Provide distinct overlap fractions in (0, 1]')
     if not records:
         raise ValueError('No MLP records to analyze')
+    if any(r['config'] != 'mlp' for r in records):
+        raise ValueError('Expected the default MLP experiment')
     output=Path(output); output.mkdir(parents=True, exist_ok=True)
     if any(r['arch'] != 'mlp' or r['validation']['validation_count'] != 6222 for r in records):
         raise ValueError('Expected MLP results evaluated on the expanded 6,222-image held-out set')
@@ -35,10 +37,10 @@ def analyze(records, output, make_plots=True, fractions=(.01,.05,.10)):
             if rec['ord'] in groups[key]:
                 raise ValueError(f'Duplicate run {config} {key} {rec["ord"]}')
             groups[key][rec['ord']]=rec
-            for comparison in PROBE_COMPARISONS:
-                for value in overlap_scores(rec['mechanism']['activations'], fractions, comparison=comparison):
+            if rec['ord'] == 'junkfirst':
+                for value in overlap_scores(rec['mechanism']['activations'], fractions):
                     overlaps.append(dict(config=config, dataset=rec['task'], width=rec['width'], seed=rec['seed'],
-                                         order=rec['ord'], comparison=comparison,
+                                         order=rec['ord'], comparison='cross_probe',
                                          fraction=value['fraction'], overlap=value['overlap'],
                                          **{f'layer_{i}':v for i,v in enumerate(value['per_layer'])}))
         paired=[]
@@ -64,31 +66,26 @@ def analyze(records, output, make_plots=True, fractions=(.01,.05,.10)):
             write_csv(out/(name+'.csv'),rows)
         if make_plots:
             sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'figures'))
-            from fig_matched_overlap import plot
+            from fig_mlp_overlap import plot
             with contextlib.redirect_stdout(sys.stderr):
                 plot(out,out/'accuracy_summary.csv',out,config=config,fractions=fractions)
-    if make_plots and {r['config'] for r in records} == {'A','B','C'}:
-        with contextlib.redirect_stdout(sys.stderr):
-            plot(output, output/'A/accuracy_summary.csv', output, config='all',fractions=fractions)
     if make_plots:
         from mlp_plots import from_records, primacy
         primacy(from_records(records, include_overlap=False), output/'mlp_primacy_seeds')
-    report=['# MLP configurations A/B/C\n',f'{len(records)} completed runs.',
+    report=['# MLP\n',f'{len(records)} completed runs.',
             'Training: 56,000 original images. Validation: original 4,000 plus 2,222 official test images.',
             f'{sum("reevaluation" in r for r in records)} records reuse completed weights with a new final evaluation; any reused historical learning curves still use 4,000 images.',
-            'Default figures use training-to-training overlap (0J/TJ) on the same saved 512 corruption-A inputs at both phases. Accuracy uses validation. CSVs also retain explicitly labeled validation and cross-probe comparisons.',
-            'Each configuration has a threshold-panel figure showing all datasets and widths, with means over seeds 0, 1, 2. The primacy-only grid has configuration rows, dataset columns, and separate seed lines.',
+            'Overlap compares Phase-1 OOD activations on 512 corruption-training images (0J) with Phase-2 target activations on 512 held-out target images (TX), for OOD-first runs. Accuracy uses validation.',
+            'The overlap figure has threshold panels with means over seeds 0, 1, 2. The primacy figure has three dataset panels and separate seed lines.',
             'Thresholds: '+', '.join(f'{f:.0%}' for f in fractions)+'. All neuron scores and both checkpoints remain available for other thresholds.',
             'Low overlap is observational; neither monotonicity nor a causal neuron-role interpretation is assumed.\n']
     if make_plots:
         for c in sorted({r['config'] for r in records}):
-            report.append(f'- [Config {c}: PNG]({c}/mlp_training_overlap.png) · [PDF]({c}/mlp_training_overlap.pdf)')
+            report.append(f'- [Representational overlap: PNG]({c}/mlp_overlap.png) · [PDF]({c}/mlp_overlap.pdf)')
         report.append('- [Primacy seed curves: PNG](mlp_primacy_seeds.png) · [PDF](mlp_primacy_seeds.pdf)')
-    if make_plots and {r['config'] for r in records} == {'A','B','C'}:
-        report.append('- [A/B/C overlap grid: PNG](mlp_ABC_training_overlap.png) · [PDF](mlp_ABC_training_overlap.pdf)')
     (output/'RESULTS.md').write_text('\n\n'.join(report)+'\n')
     return dict(runs=len(records),configs=sorted({r['config'] for r in records}),validation_count=6222,
-                plots=make_plots,fractions=fractions,default_comparison='training')
+                plots=make_plots,fractions=fractions,comparison='cross_probe')
 
 
 if __name__ == '__main__':

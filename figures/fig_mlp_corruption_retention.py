@@ -1,10 +1,10 @@
-"""MLP diff figure: one row of three panels, one per dataset.
+"""MLP corruption retention: one row of three panels, one per dataset.
 
 For OOD-first runs, accuracy on the phase-1 corruption set, measured twice:
   pale bar  = end of phase 1 (the corruption mapping is memorized)
   dark bar  = end of phase 2 (after the target phase)
 x is model scale (parameter count); bars smaller than 6% of the axis carry their value as text.
-Reads results/curriculum.jsonl. Output: results/figures/diff.png
+Reads results/curriculum.jsonl. Output: results/figures/mlp_corruption_retention.png
 """
 import os, sys
 from collections import defaultdict
@@ -14,7 +14,7 @@ from matplotlib.patches import Patch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import load, FIGDIR
 
-CONFIG = 'B'
+CONFIG = 'mlp'
 PANELS = [('mlp', 'mnist', 'MLP — MNIST'), ('mlp', 'fashion', 'MLP — Fashion-MNIST'), ('mlp', 'kmnist', 'MLP — KMNIST')]
 COLORS = ['#4E9BD5', '#E6B422', '#3FB68B']
 
@@ -61,4 +61,4 @@ fig.legend([Patch(facecolor='#9e9e9e', alpha=0.38, edgecolor='#9e9e9e'), Patch(f
            loc='lower center', ncol=2, frameon=False, fontsize=11, bbox_to_anchor=(0.5, 0.0))
 fig.tight_layout(rect=[0, 0.12, 1, 1], h_pad=2.0)
 os.makedirs(FIGDIR, exist_ok=True)
-out = os.path.join(FIGDIR, 'diff.png'); fig.savefig(out, dpi=150); print('SAVED', out)
+out = os.path.join(FIGDIR, 'mlp_corruption_retention.png'); fig.savefig(out, dpi=150); print('SAVED', out)

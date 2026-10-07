@@ -13,11 +13,12 @@ Usage:
     python src/run.py curriculum --dry_run            # print the run list, execute nothing
     python src/run.py curriculum --limit 4            # first 4 full-length runs only
 
-MLP datasets and additional validation images are downloaded/prepared automatically.
+All datasets, including MLP validation images and foundation corpora, are prepared
+automatically by their trainers.
 Completed runs are preserved and skipped on restart. Interrupted toy runs restart
 individually; foundation runs resume their optimizer/RNG checkpoints. A changed
 configuration requires a new --out file. Final weights live in per-run directories
-under <out>.artifacts; --no_ckpt disables this, --ckpt_dir moves that artifact root.
+under <out>.artifacts; --ckpt_dir moves that artifact root.
 """
 import os, sys, json, argparse, importlib.util, hashlib
 from pathlib import Path
@@ -36,7 +37,7 @@ def load_config(name):
     return mod
 
 
-def execute(runs, experiment, data_dir, out, ckpt_dir=None, no_ckpt=False, limit=None):
+def execute(runs, experiment, data_dir, out, ckpt_dir=None, limit=None):
     """Commit complete records atomically; never truncate or mix configurations."""
     out = Path(out).resolve()
     # Even an explicitly shared artifact root is isolated by output identity.
@@ -51,8 +52,7 @@ def execute(runs, experiment, data_dir, out, ckpt_dir=None, no_ckpt=False, limit
         key = hashlib.sha256(json.dumps([driver, cfg], sort_keys=True).encode()).hexdigest()
         cfg.pop('ckpt_dir', None)
         cfg.pop('probe_out', None)
-        if not no_ckpt:
-            cfg['ckpt_dir'] = str(artifacts / key)
+        cfg['ckpt_dir'] = str(artifacts / key)
         if experiment == 'mechanism' and cfg.get('ord') == 'junkfirst':
             cfg['probe_out'] = str(artifacts / key / 'mechanism_probes')
         plan.append(dict(id=key, driver=driver, cfg=cfg))
@@ -78,16 +78,11 @@ def execute(runs, experiment, data_dir, out, ckpt_dir=None, no_ckpt=False, limit
                 raise ValueError('Results do not match the run manifest; preserved unchanged')
             completed.add(key)
         selected = plan[:limit] if limit is not None else plan
-        prepared = set()
         for i, task in enumerate(selected, 1):
             if task['id'] in completed:
                 print(f'  [{i}/{len(selected)}] already complete; skipping')
                 continue
             cfg = dict(task['cfg'])
-            if task['driver'] == 'vision' and cfg['task'] not in prepared:
-                from prepare_data import build_image
-                build_image(cfg['task'], cfg['data_dir'])
-                prepared.add(cfg['task'])
             record = DRIVERS[task['driver']].run(cfg)
             record['runner_id'] = task['id']
             # Replacing the complete JSONL avoids a torn last record on interruption.
@@ -99,13 +94,12 @@ def execute(runs, experiment, data_dir, out, ckpt_dir=None, no_ckpt=False, limit
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('experiment', choices=['curriculum', 'mechanism', 'foundation', 'mlp_a'])
+    ap.add_argument('experiment', choices=['curriculum', 'mechanism', 'foundation', 'mlp'])
     ap.add_argument('--data_dir', default=os.path.join(ROOT, 'data'))
     ap.add_argument('--out', default=None)
     ap.add_argument('--limit', type=int, default=None, help='run only the first N configurations; training length is unchanged')
     ap.add_argument('--ckpt_dir', default=None, help='where model weights are written '
                                                      '(default <out>.artifacts)')
-    ap.add_argument('--no_ckpt', action='store_true', help='do not save model weights')
     ap.add_argument('--dry_run', action='store_true', help='print the run list and exit')
     a = ap.parse_args()
 
@@ -121,7 +115,7 @@ def main():
         print('  ...' if len(runs) > 12 else '')
         return
 
-    execute(runs, a.experiment, a.data_dir, out, a.ckpt_dir, a.no_ckpt, a.limit)
+    execute(runs, a.experiment, a.data_dir, out, a.ckpt_dir, a.limit)
 
 
 if __name__ == '__main__':

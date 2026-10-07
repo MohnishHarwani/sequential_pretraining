@@ -19,7 +19,7 @@ Validation data: approximately VAL_BYTES scored bytes per distribution, drawn as
 excludes these documents from training at every scale. The same sampling seed and shared
 file give identical validation sequences across runs, arms, and model scales.
 
-Checkpoints: set cfg['ckpt_dir'] and the FINAL weights are written to <ckpt_dir>/<tag>.pt, so a
+Checkpoints: FINAL weights are written to <ckpt_dir>/<tag>.pt automatically, so a
 finished run can be re-scored on a new validation set without retraining -- at this scale,
 re-running is many GPU-hours.
 Periodic .pt.resume checkpoints retain optimizer/RNG state for interrupted runs.
@@ -74,6 +74,10 @@ def run(cfg):
     """cfg keys: width layers seq ord seed phase1 phase2 junk_fraction junk_volume
     exposure_rate exposure_set_fraction p1_fraction lr warmup clip batch good_data ood_data config data_dir
     [log_every] [ckpt_dir]."""
+    if cfg.get('ord') not in ('goodfirst', 'junkfirst'):
+        raise ValueError(f"ord must be 'goodfirst' or 'junkfirst', got {cfg.get('ord')!r}")
+    from training_setup import prepare_training
+    cfg = prepare_training(cfg, 'foundation')
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     amp = torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=(dev == 'cuda'))
     W, NL, SEQ = cfg['width'], cfg['layers'], cfg['seq']
@@ -175,30 +179,32 @@ def run(cfg):
 
     MAX = BIAS + COMMON
     state = TrainingState(cfg, net, opt, rng, ckpt)
-    start, history = state.restore(dict(steps=[], vce=[], oce=[]))
-    steps, vce, oce = history['steps'], history['vce'], history['oce']
-    for step in range(start, MAX):
-        for g in opt.param_groups: g['lr'] = lr_at(step)
-        s = src(step)
-        batch = exposure_step() if s == 'et' else (gstep() if s == 'g' else jstep(step))
-        opt.zero_grad(set_to_none=True)
-        # One batch draw and one optimizer update: accumulation preserves the paper's batch size.
-        for offset in range(0, B, MICRO):
-            chunk = batch[offset:offset + MICRO]
-            loss = _ce(chunk) * (len(chunk) / B)
-            if not torch.isfinite(loss):
-                raise FloatingPointError(f'Nonfinite loss at step {step}')
-            loss.backward()
-        gn = torch.nn.utils.clip_grad_norm_(net.parameters(), CLIP)
-        if not torch.isfinite(gn):
-            raise FloatingPointError(f'Nonfinite gradient at step {step}')
-        opt.step()
-        if step % LOG == 0 or step == MAX - 1:
-            steps.append(step); vce.append(round(eval_ce(g_te)[0], 4)); oce.append(round(eval_ce(ood_te)[0], 4))
-            progress(cfg, step + 1, MAX, target_loss=vce[-1], ood_loss=oce[-1])
-        state.after_step(step + 1, dict(steps=steps, vce=vce, oce=oce),
-                         force=step + 1 in (BIAS, MAX))
-    state.close()
+    try:
+        start, history = state.restore(dict(steps=[], vce=[], oce=[]))
+        steps, vce, oce = history['steps'], history['vce'], history['oce']
+        for step in range(start, MAX):
+            for g in opt.param_groups: g['lr'] = lr_at(step)
+            s = src(step)
+            batch = exposure_step() if s == 'et' else (gstep() if s == 'g' else jstep(step))
+            opt.zero_grad(set_to_none=True)
+            # One batch draw and one optimizer update: accumulation preserves the paper's batch size.
+            for offset in range(0, B, MICRO):
+                chunk = batch[offset:offset + MICRO]
+                loss = _ce(chunk) * (len(chunk) / B)
+                if not torch.isfinite(loss):
+                    raise FloatingPointError(f'Nonfinite loss at step {step}')
+                loss.backward()
+            gn = torch.nn.utils.clip_grad_norm_(net.parameters(), CLIP)
+            if not torch.isfinite(gn):
+                raise FloatingPointError(f'Nonfinite gradient at step {step}')
+            opt.step()
+            if step % LOG == 0 or step == MAX - 1:
+                steps.append(step); vce.append(round(eval_ce(g_te)[0], 4)); oce.append(round(eval_ce(ood_te)[0], 4))
+                progress(cfg, step + 1, MAX, target_loss=vce[-1], ood_loss=oce[-1])
+            state.after_step(step + 1, dict(steps=steps, vce=vce, oce=oce),
+                             force=step + 1 in (BIAS, MAX))
+    finally:
+        state.close()
     save()                                                 # keep the finished model
 
     v, nv = eval_ce(g_te); o, no = eval_ce(ood_te)
@@ -220,7 +226,7 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('--width', type=int, default=1088); ap.add_argument('--layers', type=int, default=7)
-    ap.add_argument('--seq', type=int, default=512); ap.add_argument('--ord', default='junkfirst')
+    ap.add_argument('--seq', type=int, default=512); ap.add_argument('--ord', choices=['goodfirst', 'junkfirst'], default='junkfirst')
     ap.add_argument('--seed', type=int, default=0); ap.add_argument('--phase1', type=int, default=9000)
     ap.add_argument('--phase2', type=int, default=9000); ap.add_argument('--junk_fraction', type=float, default=0.25)
     ap.add_argument('--junk_volume', type=int, default=2000); ap.add_argument('--exposure_rate', type=float, default=0.0)
@@ -230,7 +236,7 @@ if __name__ == '__main__':
     ap.add_argument('--good_data', default='fineweb_345MB.npy'); ap.add_argument('--ood_data', default='code_500MB.npy')
     ap.add_argument('--config', default='100M'); ap.add_argument('--data_dir', default='data')
     ap.add_argument('--log_every', type=int, default=500)
-    ap.add_argument('--ckpt_dir', default=None)
+    ap.add_argument('--ckpt_dir', default=None, help='override the automatic per-configuration checkpoint directory')
     ap.add_argument('--microbatch', type=int, default=8)
     ap.add_argument('--checkpoint_every', type=int, default=1000)
     print(json.dumps(run(vars(ap.parse_args()))))

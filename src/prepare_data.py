@@ -11,8 +11,8 @@ Sources are fetched automatically from public Hugging Face datasets.
 Image tasks  -> <task>_x.npy (float32 [N, features], raw pixel values) and <task>_y.npy (int64 [N])
 Foundation corpora -> flat uint8 UTF-8 streams with shared held-out data
 
-Foundation corpora are truncated to an exact byte budget and named `<corpus>_<MB>MB.npy`, so the
-file name states its size. Budgets per scale:
+Foundation corpora are capped at a byte budget and named `<corpus>_<MB>MB.npy`, so the
+file name states the requested budget. Budgets per scale:
 
     scale   target corpora (fineweb, tinystories)   OOD corpora (code, math, dewiki, fiwiki)
     100M    345 MB                                  500 MB

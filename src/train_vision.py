@@ -1,4 +1,4 @@
-"""Two-phase curriculum trainer for MLP image classifiers (feeds the core-L, diff, and mechanism figures).
+"""Two-phase MLP trainer for primacy, corruption-retention, and mechanistic overlap figures.
 
 Experiment: a shared trunk with two linear heads (a "good" head and a "junk" head).
 Phase 1 ("bias") trains on either the good task (good-first) or a fixed set of memorizable
@@ -11,7 +11,7 @@ phase-1 ordering; monotonicity with model size is not assumed.
 
 Public API:
     run(cfg: dict) -> dict          # trains one model, returns a JSON-able result record
-MLP runs that save checkpoints automatically retain Phase-1 weights, exact probe inputs,
+MLP runs automatically retain Phase-1 and final weights, exact probe inputs,
 and both-phase activation snapshots. cfg['probe_out'] can override the snapshot directory.
 """
 import os, json, numpy as np, torch, torch.nn as nn, torch.nn.functional as F
@@ -51,6 +51,10 @@ class MLP(nn.Module):
 def run(cfg):
     """cfg keys: arch task width depth ord seed phase1 phase2 junk_fraction junk_volume
     junk_not_refed lr batch config data_dir [probe_out] [log_every] [ckpt_dir]."""
+    if cfg.get('ord') not in ('goodfirst', 'junkfirst'):
+        raise ValueError(f"ord must be 'goodfirst' or 'junkfirst', got {cfg.get('ord')!r}")
+    from training_setup import prepare_training
+    cfg = prepare_training(cfg, 'vision')
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     arch, task, W, depth = cfg['arch'], cfg['task'], cfg['width'], cfg['depth']
     if arch != 'mlp':
@@ -150,9 +154,9 @@ def run(cfg):
         def capture(phase):
             was_training = net.training
             net.eval()
-            for name, P in (('J', Jp), ('X', Xp)):
-                _, acts = net.trunk_acts(P)
-                snap[phase + name] = [a.abs().mean(0).cpu().numpy() for a in acts]
+            name, probe = ('0J', Jp) if phase == '0' else ('TX', Xp)
+            _, acts = net.trunk_acts(probe)
+            snap[name] = [a.abs().mean(0).cpu().numpy() for a in acts]
             net.train(was_training)
             archive.save_activations(snap)
 
@@ -206,16 +210,15 @@ if __name__ == '__main__':                                # optional standalone 
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('--arch', choices=['mlp'], default='mlp'); ap.add_argument('--task', choices=['mnist', 'fashion', 'kmnist'], default='mnist')
-    ap.add_argument('--width', type=int, default=64); ap.add_argument('--depth', type=int, default=2)
-    ap.add_argument('--ord', default='junkfirst'); ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--width', type=int, default=8); ap.add_argument('--depth', type=int, default=2)
+    ap.add_argument('--ord', choices=['goodfirst', 'junkfirst'], default='junkfirst'); ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--phase1', type=int, default=30000); ap.add_argument('--phase2', type=int, default=120000)
     ap.add_argument('--junk_fraction', type=float, default=0.25); ap.add_argument('--junk_volume', type=int, default=2000)
     ap.add_argument('--junk_not_refed', type=int, default=1)
-    ap.add_argument('--lr', type=float, default=1e-3); ap.add_argument('--batch', type=int, default=64)
-    ap.add_argument('--config', default='base'); ap.add_argument('--data_dir', default='data')
+    ap.add_argument('--lr', type=float, default=3e-4); ap.add_argument('--batch', type=int, default=256)
+    ap.set_defaults(config='mlp')
+    ap.add_argument('--data_dir', default='data')
     ap.add_argument('--probe_out', default=None)
-    ap.add_argument('--ckpt_dir', default=None)
+    ap.add_argument('--ckpt_dir', default=None, help='override the automatic per-configuration checkpoint directory')
     a = vars(ap.parse_args()); a['junk_not_refed'] = bool(a['junk_not_refed'])
-    from prepare_data import build_image
-    build_image(a['task'], a['data_dir'])
     print(json.dumps(run(a)))

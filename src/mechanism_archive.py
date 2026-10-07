@@ -52,13 +52,9 @@ class MechanismArchive:
         atomic_npz(self.activations, arrays)
 
 
-PROBE_COMPARISONS = {'cross_probe': ('0J', 'TX'),
-                     'validation': ('0X', 'TX'), 'training': ('0J', 'TJ')}
-
-
-def overlap_scores(path, fractions=(.01, .05, .10), comparison='training'):
-    """Per-layer top-f Jaccard and its layer mean, matching the paper's metric."""
-    first, last = PROBE_COMPARISONS[comparison]
+def overlap_scores(path, fractions=(.01, .05, .10)):
+    """Layer-mean top-f Jaccard: Phase-1 OOD versus Phase-2 target activations."""
+    first, last = '0J', 'TX'
     fractions = tuple(fractions)
     if not fractions or any(not 0 < f <= 1 for f in fractions):
         raise ValueError('Overlap fractions must be greater than zero and at most one')

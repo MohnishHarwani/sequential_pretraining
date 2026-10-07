@@ -1,4 +1,4 @@
-"""Shared MLP publication layouts: paired seed curves and matched-probe overlap."""
+"""Shared MLP publication layouts: paired seed curves and cross-phase representational overlap."""
 import csv
 from pathlib import Path
 import sys
@@ -10,11 +10,11 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from mechanism_archive import overlap_scores, PROBE_COMPARISONS
+from mechanism_archive import overlap_scores
 
 DATASETS = [('mnist', 'MNIST'), ('fashion', 'Fashion-MNIST'), ('kmnist', 'KMNIST')]
 COLORS = ['#0072B2', '#E69F00', '#009E73']
-SETTINGS = {'A': 'LR 3e-4 / bs 256', 'B': 'LR 1e-3 / bs 64', 'C': 'LR 5e-4 / bs 32'}
+SETTINGS = {'mlp': 'LR 3e-4 / bs 256'}
 
 
 def validate_fractions(fractions):
@@ -24,11 +24,13 @@ def validate_fractions(fractions):
     return fractions
 
 
-def from_records(records, fractions=(.01, .05, .10), comparison='training', include_overlap=True):
+def from_records(records, fractions=(.01, .05, .10), include_overlap=True):
     """Pair each seed's final accuracies; reject duplicates or incomplete pairs."""
     fractions = validate_fractions(fractions)
     groups = {}
     for r in records:
+        if r.get('config') != 'mlp':
+            raise ValueError('Expected the default MLP experiment')
         if r.get('arch') != 'mlp':
             raise ValueError('Expected MLP records only')
         key = (r['config'], r['task'], r['width'], r['seed'])
@@ -48,9 +50,9 @@ def from_records(records, fractions=(.01, .05, .10), comparison='training', incl
                                     params_M=good['params_M'],
                                     primacy_sensitivity=good['val_acc_full'] - junk['val_acc_full']))
         if include_overlap:
-            for score in overlap_scores(junk['mechanism']['activations'], fractions, comparison):
+            for score in overlap_scores(junk['mechanism']['activations'], fractions):
                 block['overlap'].append(dict(dataset=dataset, width=width, seed=seed,
-                                            order='junkfirst', comparison=comparison, **score))
+                                            order='junkfirst', comparison='cross_probe', **score))
     for block in data.values():
         for key in {(r['dataset'], int(r['width'])) for r in block['paired']}:
             rows = [r for r in block['paired'] if (r['dataset'], int(r['width'])) == key]
@@ -63,6 +65,8 @@ def from_records(records, fractions=(.01, .05, .10), comparison='training', incl
 
 
 def load_tables(folder, configs):
+    if list(configs) != ['mlp']:
+        raise ValueError('Expected the default MLP experiment')
     data = {}
     for config in configs:
         root = Path(folder) / config
@@ -92,13 +96,15 @@ def style(ax, mechanism=False):
     ax.xaxis.set_major_formatter(FuncFormatter(fmt))
     if mechanism:
         ax.xaxis.set_minor_locator(NullLocator())
-    ax.grid(True, color='#DDDDDD', lw=.8)
+    ax.grid(True, color='#DDDDDD' if mechanism else '#E5E5E5', lw=.8)
+    if not mechanism:
+        ax.tick_params(axis='x', which='minor', length=2)
     ax.set_axisbelow(True)
     for spine in ('top', 'right'):
         ax.spines[spine].set_visible(False)
 
 
-def export(fig, output):
+def export(fig, output, pad=.2):
     """Save both formats after checking every data point is finite and visible."""
     fig.canvas.draw()
     for ax in fig.axes:
@@ -114,7 +120,7 @@ def export(fig, output):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     for ext in ('.png', '.pdf'):
-        fig.savefig(output.with_suffix(ext), dpi=200, bbox_inches='tight', pad_inches=.2)
+        fig.savefig(output.with_suffix(ext), dpi=200, bbox_inches='tight', pad_inches=pad)
     plt.close(fig)
 
 
@@ -124,10 +130,12 @@ def setup():
 
 
 def primacy(data, output):
-    """Configuration rows, dataset columns, separate paired-seed lines."""
+    """MLP: three dataset panels with separate paired-seed lines."""
     setup()
     configs = sorted(data)
-    fig, axes = plt.subplots(len(configs), 3, figsize=(16.5, 4 * len(configs) + .7), squeeze=False)
+    single = len(configs) == 1
+    fig, axes = plt.subplots(len(configs), 3,
+                             figsize=(15.5, 4.9) if single else (16.5, 4 * len(configs) + .7), squeeze=False)
     for i, config in enumerate(configs):
         for j, (dataset, label) in enumerate(DATASETS):
             ax = axes[i, j]
@@ -148,24 +156,29 @@ def primacy(data, output):
             ax.axhline(0, color='#D9D9D9', lw=1, zorder=0)
             if i == 0:
                 ax.set_title(label, fontsize=14, fontweight='bold')
-    fig.subplots_adjust(left=.12, right=.99, bottom=.13 if len(configs) == 1 else .065,
-                        top=.79 if len(configs) == 1 else .89, hspace=.25, wspace=.26)
+    fig.subplots_adjust(left=.075 if single else .12, right=.99, bottom=.15 if single else .065,
+                        top=.79 if single else .89, hspace=.25, wspace=.25 if single else .26)
     for i, config in enumerate(configs):
+        if len(configs) == 1:
+            continue
         box = axes[i, 0].get_position()
         fig.text(.055, (box.y0 + box.y1) / 2, f'config {config}\n{SETTINGS.get(config, "")}',
                  fontsize=12, fontweight='bold', ha='center', va='center', rotation=90)
-    fig.text(.014, .48, 'target-first − OOD-first\nfinal accuracy', rotation=90,
-             ha='center', va='center', fontsize=11)
+    if single:
+        axes[0, 0].set_ylabel('target-first − OOD-first\nfinal accuracy')
+    else:
+        fig.text(.014, .48, 'target-first − OOD-first\nfinal accuracy', rotation=90,
+                 ha='center', va='center', fontsize=11)
     fig.suptitle('MLP', fontsize=16, fontweight='bold', y=.985)
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(.55, .92 if len(configs) == 1 else .955),
-               ncol=3, frameon=False, fontsize=10)
-    fig.supxlabel('parameters', fontsize=11, x=.555, y=.015)
-    export(fig, output)
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(.5, .923) if single else (.55, .955),
+               ncol=3, frameon=False, fontsize=10, handlelength=2, columnspacing=2)
+    fig.supxlabel('parameters', fontsize=11, x=.5 if single else .555, y=.025 if single else .015)
+    export(fig, output, pad=.1 if single else .2)
 
 
-def mechanism(data, output, fractions=(.01, .05, .10), comparison='training'):
-    """Configuration rows, threshold columns, seed-mean accuracy and overlap."""
+def mechanism(data, output, fractions=(.01, .05, .10)):
+    """MLP: threshold panels with seed-mean accuracy and overlap."""
     fractions = validate_fractions(fractions)
     setup()
     configs = sorted(data)
@@ -184,7 +197,7 @@ def mechanism(data, output, fractions=(.01, .05, .10), comparison='training'):
                     accuracy = block['accuracy'][(dataset, width)]
                     rows = [r for r in block['overlap'] if r['dataset'] == dataset and
                             int(r['width']) == width and r['order'] == 'junkfirst' and
-                            r['comparison'] == comparison and float(r['fraction']) == fraction]
+                            r['comparison'] == 'cross_probe' and float(r['fraction']) == fraction]
                     require_seeds(rows)
                     paired = [r for r in block['paired'] if r['dataset'] == dataset and int(r['width']) == width]
                     require_seeds(paired)
@@ -221,11 +234,9 @@ def mechanism(data, output, fractions=(.01, .05, .10), comparison='training'):
     fig.legend(handles=[Line2D([], [], color=c, lw=2.4, label=label)
                         for c, (_, label) in zip(COLORS, DATASETS)],
                loc='upper center', bbox_to_anchor=(.5, .94), ncol=3, frameon=False, fontsize=10)
-    label = {'training': 'training → training', 'validation': 'validation → validation',
-             'cross_probe': 'training → validation'}[comparison]
     fig.legend(handles=[Line2D([], [], color='#555', lw=2, marker='o', label='accuracy gap (solid, left axis)'),
                         Line2D([], [], color='#555', lw=2, ls='--', marker='s',
-                               label=f'{label} overlap (dashed, right axis)')],
+                               label='representational overlap (dashed, right axis)')],
                loc='lower center', bbox_to_anchor=(.5, .01), ncol=1 if single_col else 2,
                frameon=False, fontsize=10, handlelength=3)
     export(fig, output)

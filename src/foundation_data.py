@@ -65,6 +65,7 @@ def build_corpus(records, fields, name, mb, out_dir, source, overwrite=False):
     if target <= 0:
         raise ValueError('Training byte budget must be positive')
     tmp = train_path.with_name(train_path.name + '.tmp')
+    trimmed = tmp.with_name(tmp.name + '.trimmed')
     train = np.lib.format.open_memmap(tmp, mode='w+', dtype=np.uint8, shape=(target,))
     count = 0
     held = bytearray()
@@ -84,7 +85,7 @@ def build_corpus(records, fields, name, mb, out_dir, source, overwrite=False):
                 train_hash.update(chunk)
             if count == target and len(held) == VALIDATION_POOL_BYTES:
                 break
-        if count != target or len(held) != VALIDATION_POOL_BYTES:
+        if count == 0 or len(held) != VALIDATION_POOL_BYTES:
             raise ValueError(f'{name}: source exhausted with {count}/{target} training bytes '
                              f'and {len(held)}/{VALIDATION_POOL_BYTES} held-out bytes')
         val = np.frombuffer(held, dtype=np.uint8)
@@ -96,9 +97,15 @@ def build_corpus(records, fields, name, mb, out_dir, source, overwrite=False):
                 np.save(f, val)
             os.replace(str(val_path) + '.tmp', val_path)
         train.flush()
+        if count < target:
+            with trimmed.open('wb') as stream:
+                np.save(stream, train[:count])
         del train
+        if count < target:
+            os.replace(trimmed, tmp)
         meta = dict(split=SPLIT_VERSION, corpus=name, source=source,
-                    training_bytes=target, training_sha256=train_hash.hexdigest(),
+                    training_bytes=count, requested_training_bytes=target,
+                    training_sha256=train_hash.hexdigest(),
                     validation_file=val_path.name,
                     validation_sha256=hashlib.sha256(held).hexdigest())
         # Publish a recovery record before either committed file changes. A retry
@@ -106,8 +113,10 @@ def build_corpus(records, fields, name, mb, out_dir, source, overwrite=False):
         atomic_json(pending, meta)
         os.replace(tmp, train_path)
         os.replace(pending, meta_path)
-        print(f'{train_path.name}: {target / 1e6:g} MB training; shared {val_path.name}')
+        print(f'{train_path.name}: {count / 1e6:g} MB training; shared {val_path.name}')
     finally:
+        if trimmed.exists():
+            trimmed.unlink()
         if tmp.exists() and not pending.exists():
             tmp.unlink()
 

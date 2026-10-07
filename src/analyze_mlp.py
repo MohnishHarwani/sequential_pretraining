@@ -18,17 +18,14 @@ def analyze(root):
     with (root/'analysis.lock').open('a+') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         out=root/'analysis'
-        if (out/'complete.json').exists():
-            cached=json.loads((out/'complete.json').read_text())
-            if cached.get('comparison') == 'training':
-                return cached
+        (out/'complete.json').unlink(missing_ok=True)
         manifest=json.loads((root/'manifest.json').read_text())
         records=[json.loads((root/'records'/f"{task['id']}.json").read_text()) for task in manifest['tasks']]
         if any(r.get('arch') != 'mlp' for r in records):
             raise ValueError('MLP overlap analysis requires MLP records')
-        if {r.get('config') for r in records} != {'A'}:
-            raise ValueError('This analyzer expects config A only; use analyze_mlp_configs.py for A/B/C')
-        title = 'MLP config A'
+        if {r.get('config') for r in records} != {'mlp'}:
+            raise ValueError('This analyzer expects the default MLP experiment')
+        title = 'MLP'
         groups=defaultdict(dict)
         for rec in records:
             groups[(rec['task'],rec['width'],rec['seed'])][rec['ord']]=rec
@@ -76,7 +73,7 @@ def analyze(root):
         ax.set_xscale('log'); ax.axhline(0,color='gray',lw=.7)
         ax.set(xlabel='Parameters',ylabel='Target-first − OOD-first final accuracy',title=title)
         ax.legend(); ax.grid(alpha=.2); fig.tight_layout()
-        fig.savefig(out/'mlp_A_sensitivity.png',dpi=200); fig.savefig(out/'mlp_A_sensitivity.pdf'); plt.close(fig)
+        fig.savefig(out/'mlp_sensitivity.png',dpi=200); fig.savefig(out/'mlp_sensitivity.pdf'); plt.close(fig)
         fig,axes=plt.subplots(1,3,figsize=(16,4.5))
         for ax,fraction in zip(axes,[.01,.05,.10]):
             other=ax.twinx()
@@ -92,11 +89,11 @@ def analyze(root):
         axes[0].set_ylabel('Primacy sensitivity (solid)')
         other.set_ylabel('Jaccard overlap (dashed)')
         axes[0].legend(); fig.suptitle(title + ': sensitivity and cross-phase overlap')
-        fig.tight_layout(); fig.savefig(out/'mlp_A_overlap.png',dpi=200); fig.savefig(out/'mlp_A_overlap.pdf'); plt.close(fig)
-        metadata=dict(runs=len(records),pairs=len(paired),config='A',smoke=manifest.get('smoke',False),
+        fig.tight_layout(); fig.savefig(out/'mlp_overlap.png',dpi=200); fig.savefig(out/'mlp_overlap.pdf'); plt.close(fig)
+        metadata=dict(runs=len(records),pairs=len(paired),config='mlp',smoke=manifest.get('smoke',False),
                       error_bars='sample standard deviation across paired seeds',
-                      accuracy='final full-held-out accuracy',comparison='training',
-                      overlap='training-to-training (0J/TJ), layer mean of top-f Jaccard; OOD-first runs')
+                      accuracy='final full-held-out accuracy',comparison='cross_probe',
+                      overlap='Phase-1 OOD to Phase-2 target (0J/TX), layer mean of top-f Jaccard; OOD-first runs')
         (out/'complete.json').write_text(json.dumps(metadata,indent=2)+'\n')
         return metadata
 

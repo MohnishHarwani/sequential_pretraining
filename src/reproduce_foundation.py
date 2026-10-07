@@ -1,6 +1,8 @@
 """One-command public pipeline: download data, train/resume, verify, and draw Figure 6.
 
-python src/reproduce_foundation.py --scale 100M --output results/foundation_100M
+python src/reproduce_foundation.py --scales 100M 500M 1B
+Select any subset, or --scales all. Each size includes both orderings and Exposure
+Therapy with seeds 0/1/2. Figures go to OUTPUT/figures; checkpoints to OUTPUT/SCALE/runs.
 Run training on a GPU. Separate stages support cluster deployment without changing
 scientific code: --stage prepare|init|worker|analyze. Default stage is all.
 """
@@ -152,30 +154,73 @@ def worker(root):
     return 75
 
 
-def main():
+def render(records, scales, output, smoke=False):
+    """Redraw saved results without downloading data or starting training."""
+    records = Path(records).resolve()
+    for scale in scales:
+        args = [sys.executable, str(ROOT/'figures/fig_foundation.py'), '--scale', scale,
+                '--input', str(records), '--out-dir', str(Path(output).resolve())]
+        if smoke:
+            args.append('--smoke')
+        subprocess.run(args, check=True)
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--scale', choices=['100M','500M','1B'], default='100M')
+    ap.add_argument('--scales', '--scale', nargs='+', choices=['100M','500M','1B','all'],
+                    help='Any subset, or all (default: 100M)')
     ap.add_argument('--data-dir', default=str(ROOT/'data/foundation'))
-    ap.add_argument('--output', default=str(ROOT/'results/foundation_100M'))
+    ap.add_argument('--output', default=str(ROOT/'results/foundation'))
     ap.add_argument('--stage', choices=['all','prepare','init','worker','analyze'], default='all')
     ap.add_argument('--microbatch', type=int, default=8, help='Accumulation microbatch; optimizer batch stays 32')
     ap.add_argument('--smoke', action='store_true', help='Three 40-step runs at actual model scale; separate output required')
-    a = ap.parse_args(); root = Path(a.output).resolve()
-    if a.stage in ['all','prepare']:
-        from foundation_sources import prepare_scale
-        prepare_scale(a.scale, a.data_dir)
-        if a.stage == 'prepare': return 0
-    if a.stage in ['all','init']:
-        m = initialize(root, a.data_dir, a.scale, a.microbatch, a.smoke)
-        print(json.dumps(dict(campaign=str(root), tasks=len(m['tasks']), smoke=a.smoke)), flush=True)
-        if a.stage == 'init': return 0
-    if a.stage == 'worker': return worker(root)
-    if a.stage == 'all':
-        # Execute the frozen version and reuse existing records/checkpoints on repeat invocation.
-        result = worker(root)
-        if result: return result
-    from analyze_foundation import analyze
-    print(json.dumps(analyze(root), indent=2))
+    ap.add_argument('--records', type=Path, help='Only draw this completed JSONL; no training or downloads')
+    ap.add_argument('--dry-run', action='store_true', help='Show selected runs and destinations without executing')
+    a = ap.parse_args(argv); output = Path(a.output).resolve()
+    if a.microbatch < 1 or 32 % a.microbatch:
+        ap.error('--microbatch must be a positive divisor of the optimizer batch size 32')
+    direct = (output/'manifest.json').is_file()
+    saved = json.loads((output/'manifest.json').read_text()) if direct else None
+    selection = a.scales or ([saved['scale']] if direct else ['100M'])
+    if len(set(selection)) != len(selection) or ('all' in selection and len(selection) != 1):
+        ap.error('Use distinct model sizes, or all by itself')
+    scales = ['100M','500M','1B'] if selection == ['all'] else selection
+    if direct and scales != [saved['scale']]:
+        ap.error('This output is an existing single-scale campaign; choose its scale or a new output')
+    if a.records and a.stage != 'all':
+        ap.error('--records draws saved results and cannot be combined with --stage')
+    if a.stage == 'worker' and not direct:
+        ap.error('--stage worker needs --output pointing to an initialized SCALE campaign directory')
+    roots = {scale: output if direct else output/scale for scale in scales}
+    if a.dry_run:
+        print(json.dumps(dict(scales=scales, runs_per_scale=3 if a.smoke else 72,
+                              runs=(3 if a.smoke else 72)*len(scales), seeds=[0] if a.smoke else [0,1,2],
+                              mode='plot' if a.records else a.stage,
+                              campaigns={s:str(p) for s,p in roots.items()},
+                              figures=str(output/'figures')), indent=2))
+        return 0
+    if a.records:
+        render(a.records, scales, output/'figures', a.smoke)
+        return 0
+    if a.stage == 'worker':
+        return worker(output)
+    for scale, root in roots.items():
+        if a.stage in ['all','prepare']:
+            from foundation_sources import prepare_scale
+            prepare_scale(scale, a.data_dir)
+            if a.stage == 'prepare': continue
+        if a.stage in ['all','init']:
+            m = initialize(root, a.data_dir, scale, a.microbatch, a.smoke)
+            print(json.dumps(dict(campaign=str(root), tasks=len(m['tasks']), smoke=a.smoke)), flush=True)
+            if a.stage == 'init': continue
+        if a.stage == 'all':
+            # Execute frozen code; reuse completed records and optimizer checkpoints.
+            result = worker(root)
+            if result: return result
+        from analyze_foundation import analyze
+        print(json.dumps(analyze(root), indent=2))
+        manifest = json.loads((root/'manifest.json').read_text())
+        render(root/'analysis/foundation.jsonl', [scale], output/'figures', manifest['smoke'])
     return 0
 
 
