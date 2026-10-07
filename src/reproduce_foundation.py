@@ -1,4 +1,4 @@
-"""One-command public pipeline: download data, train/resume, verify, and draw Figure 6.
+"""Download data, train/resume, verify, and recreate foundation model results.
 
 python src/reproduce_foundation.py --scales 100M 500M 1B
 Select any subset, or --scales all. Each size includes both orderings and Exposure
