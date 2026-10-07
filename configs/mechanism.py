@@ -4,7 +4,7 @@ Same two-phase curriculum, but with activation probes recorded at the end of pha
 end of phase 2. The overlap metric compares the top neurons on an OOD probe
 after phase 1 with a held-out target probe after phase 2, using layer-mean Jaccard overlap.
 
-Both orderings are run (good-first supplies the L baseline); probes are captured for
+Both orderings are run (good-first supplies the baseline); probes are captured for
 both when checkpoints are enabled. The mechanism figure uses junk-first overlap.
 EDIT the constants below to change the experiment.
 """
